@@ -1,0 +1,15 @@
+websockets
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+scipy
+statsmodels
+xarray
+dask
+pandas-datareader
+pandas-datareader
+jupyter
+notebook
+ipykernel
