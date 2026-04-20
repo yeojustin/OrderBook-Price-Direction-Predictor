@@ -71,66 +71,73 @@ pip install -r requirements.txt
 
 ## 1) Collect Data
 
-From repo root:
+Single symbol scripts (legacy):
 
 ```bash
 python ingest_data/collector.py
-```
-
-or:
-
-```bash
 python ingest_data/collector2.py
 ```
 
-Stop with `Ctrl+C`.
+Multi-symbol collector (recommended):
 
-Notes:
+```bash
+python ingest_data/collector_multi.py --symbols btcusdt,ethusdt
+```
 
-- `collector.py` and `collector2.py` are currently separate single-symbol scripts.
-- Output is CSV under `ingest_data/data/` (or script-relative `data/` depending on where you run from).
+Useful options:
+
+```bash
+python ingest_data/collector_multi.py --symbols btcusdt,ethusdt,solusdt --depth-levels 5 --interval-ms 1000
+```
+
+Output files are written under `ingest_data/data/` as `l2_data_<SYMBOL>.csv`.
 
 ---
 
 ## 2) Transform Data
 
-Open and run:
+Notebook version:
 
 - `transform_data/transform.ipynb`
 
-This notebook:
+Script version (recommended for repeatable runs):
 
-- loads raw BTC CSV
-- converts columns to numeric
-- creates time index and sorts by time
-- engineers features (`obi`, `spread`, `depth_skew`, `momentum_10s`)
-- creates the classification target using a forward time window
-- writes/uses transformed output CSV for modeling
+```bash
+python transform_data/transform_dataset.py \
+  --input-csv transform_data/l2_data_btcusdt.csv \
+  --output-csv transform_data/l2_data_btcusdt_transformed.csv
+```
 
-Expected training input file:
+This step creates:
 
-- `transform_data/l2_data_btcusdt_transformed.csv`
+- `obi`
+- `spread`
+- `depth_skew`
+- `momentum_10s`
+- `future_mid_price`
+- `target`
 
 ---
 
 ## 3) Train Models
 
-Open and run:
+Notebook version:
 
 - `model_training/train.ipynb`
 
-What it does:
+Script version:
 
-- builds feature matrix + target
-- applies chronological train/test split
-- trains baseline models:
-  - Logistic Regression
-  - Random Forest
-- reports metrics (`accuracy`, `F1`, `ROC-AUC`)
-- runs walk-forward validation (`TimeSeriesSplit`)
-- tunes decision threshold by F1
-- saves artifact to:
-  - `model_training/artifacts/btc_direction_model.joblib`
+```bash
+python model_training/train_model.py \
+  --input-csv transform_data/l2_data_btcusdt_transformed.csv \
+  --artifact-dir model_training/artifacts
+```
+
+Training script outputs:
+
+- versioned artifact: `model_training/artifacts/btc_direction_model_<timestamp>.joblib`
+- latest artifact alias: `model_training/artifacts/btc_direction_model.joblib`
+- metrics JSON: `model_training/artifacts/metrics_<timestamp>.json`
 
 ---
 
@@ -175,13 +182,72 @@ python model_training/predict.py --artifact path/to/model.joblib
 
 ---
 
+## 5) Live Prediction (WebSocket + Model)
+
+Run live inference directly from Binance depth stream:
+
+```bash
+python live_prediction/live_predict.py --symbol btcusdt
+```
+
+Example with options:
+
+```bash
+python live_prediction/live_predict.py \
+  --symbol ethusdt \
+  --artifact model_training/artifacts/btc_direction_model.joblib \
+  --depth-levels 5 \
+  --interval-ms 1000 \
+  --momentum-periods 10
+```
+
+The script prints one JSON line per prediction with `proba_up` and `pred_up`.
+
+---
+
+## 6) Backtesting with Trading Costs
+
+```bash
+python model_training/backtest.py \
+  --artifact model_training/artifacts/btc_direction_model.joblib \
+  --input-csv transform_data/l2_data_btcusdt_transformed.csv \
+  --fee-bps 1.0
+```
+
+Optional threshold override:
+
+```bash
+python model_training/backtest.py \
+  --input-csv transform_data/l2_data_btcusdt_transformed.csv \
+  --threshold 0.55
+```
+
+---
+
+## 7) One-Command Transform + Train Pipeline
+
+```bash
+python run_pipeline.py \
+  --raw-csv transform_data/l2_data_btcusdt.csv \
+  --transformed-csv transform_data/l2_data_btcusdt_transformed.csv \
+  --artifact-dir model_training/artifacts
+```
+
+This runs:
+
+1. `transform_data/transform_dataset.py`
+2. `model_training/train_model.py`
+
+---
+
 ## End-to-End Flow
 
-1. Run collector to gather fresh market data
-2. Copy/point the raw CSV into `transform_data/`
-3. Run `transform_data/transform.ipynb`
-4. Run `model_training/train.ipynb`
-5. Run `model_training/predict.py`
+1. Run `ingest_data/collector_multi.py` to gather market data
+2. Transform with `transform_data/transform_dataset.py`
+3. Train with `model_training/train_model.py` (or `run_pipeline.py`)
+4. Score batches with `model_training/predict.py`
+5. Run real-time scoring with `live_prediction/live_predict.py`
+6. Evaluate strategy with `model_training/backtest.py`
 
 ---
 
@@ -198,10 +264,8 @@ python model_training/predict.py --artifact path/to/model.joblib
 
 ---
 
-## Next Steps (... I am still implementing)
+## Remaining Next Steps
 
-- Live prediction from websocket feed to model
-- Merge collectors into one configurable multi-symbol script
-- Add automated transform + train pipeline script
-- Add backtesting with threshold and transaction cost assumptions
-- Add model versioning and experiment tracking
+- Add richer backtesting logic (position sizing, hold horizon, latency assumptions)
+- Add automated periodic retraining
+- Add model registry/experiment tracking
