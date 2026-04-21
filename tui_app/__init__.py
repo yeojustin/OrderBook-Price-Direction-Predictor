@@ -1,0 +1,2 @@
+"""TUI application package."""
+

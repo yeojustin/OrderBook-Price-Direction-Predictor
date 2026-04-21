@@ -13,3 +13,6 @@ pandas-datareader
 jupyter
 notebook
 ipykernel
+gradio
+rich
+questionary

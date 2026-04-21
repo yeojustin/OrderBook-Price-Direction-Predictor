@@ -1,131 +1,34 @@
 ## Order Book Price Movement Predictor
 
-This project predicts short-term BTC price direction from Binance Level-2 (top 5 levels) order book data.
+Predict short-horizon BTC direction from Binance Level-2 order book data.
 
-It is organized as a simple 3-stage workflow:
+![TUI Demo](assets/1st_demo.gif)
 
-1. **Ingest live order book data** from Binance WebSocket
-2. **Transform raw snapshots** into model-ready features + labels
-3. **Train and run inference** with baseline ML models
+## End-to-End Workflow
 
----
-
-## Repository Structure
-
-- `ingest_data/`
-  - `collector.py` - BTC data collector script
-  - `collector2.py` - ETH data collector script
-  - `data/` - raw collected CSV files
-- `transform_data/`
-  - `transform.ipynb` - feature engineering and target creation notebook
-  - `l2_data_btcusdt.csv` - raw BTC dataset used by transform notebook
-  - `l2_data_btcusdt_transformed.csv` - transformed dataset for training
-- `model_training/`
-  - `train.ipynb` - model training and evaluation notebook
-  - `predict.py` - command-line inference script
-  - `artifacts/` - saved model artifacts (`.joblib`)
-- `requirements.txt` - pip dependencies
-- `pyproject.toml` / `uv.lock` - project metadata and lockfile
-
----
-
-## What Data Looks Like
-
-Each raw row is one snapshot with:
-
-- `timestamp`
-- `mid_price`
-- bid prices/quantities: `b_p_0..4`, `b_q_0..4`
-- ask prices/quantities: `a_p_0..4`, `a_q_0..4`
-
-The transformed dataset adds engineered features such as:
-
-- `obi` (order book imbalance)
-- `spread`
-- `depth_skew`
-- `momentum_10s`
-- `future_mid_price`
-- `target` (1 = up, 0 = down/flat over prediction window)
-
----
-
-## Setup
-
-### Option A: Use existing virtual environment
-
-If you already have `.venv` in this repo:
+### 1) Install
 
 ```bash
-source .venv/bin/activate
+uv sync
 ```
 
-### Option B: Create environment with pip
+### 2) Collect raw order book data
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+python ingest_data/collector_multi.py --symbols btcusdt --out-dir ingest_data/data
 ```
 
----
+This writes raw L2 snapshots to `ingest_data/data/l2_data_BTCUSDT.csv`.
 
-## 1) Collect Data
-
-Single symbol scripts (legacy):
-
-```bash
-python ingest_data/collector.py
-python ingest_data/collector2.py
-```
-
-Multi-symbol collector (recommended):
-
-```bash
-python ingest_data/collector_multi.py --symbols btcusdt,ethusdt
-```
-
-Useful options:
-
-```bash
-python ingest_data/collector_multi.py --symbols btcusdt,ethusdt,solusdt --depth-levels 5 --interval-ms 1000
-```
-
-Output files are written under `ingest_data/data/` as `l2_data_<SYMBOL>.csv`.
-
----
-
-## 2) Transform Data
-
-Notebook version:
-
-- `transform_data/transform.ipynb`
-
-Script version (recommended for repeatable runs):
+### 3) Transform raw data into model dataset
 
 ```bash
 python transform_data/transform_dataset.py \
-  --input-csv transform_data/l2_data_btcusdt.csv \
+  --input-csv ingest_data/data/l2_data_BTCUSDT.csv \
   --output-csv transform_data/l2_data_btcusdt_transformed.csv
 ```
 
-This step creates:
-
-- `obi`
-- `spread`
-- `depth_skew`
-- `momentum_10s`
-- `future_mid_price`
-- `target`
-
----
-
-## 3) Train Models
-
-Notebook version:
-
-- `model_training/train.ipynb`
-
-Script version:
+### 4) Train model artifact
 
 ```bash
 python model_training/train_model.py \
@@ -133,139 +36,99 @@ python model_training/train_model.py \
   --artifact-dir model_training/artifacts
 ```
 
-Training script outputs:
+Latest artifact path:
+- `model_training/artifacts/btc_direction_model.joblib`
 
-- versioned artifact: `model_training/artifacts/btc_direction_model_<timestamp>.joblib`
-- latest artifact alias: `model_training/artifacts/btc_direction_model.joblib`
-- metrics JSON: `model_training/artifacts/metrics_<timestamp>.json`
+### 5) Run app
+
+```bash
+python app.py
+```
+
+Interactive choices:
+- `1` Live inference (continuous websocket scoring)
+- `2` Batch inference (`csv` or `socket` source)
 
 ---
 
-## 4) Run Inference
+## App Modes
 
-Use the saved artifact with:
+### Live mode
+
+- streams Binance L2 data
+- builds features (`obi`, `spread`, `depth_skew`, `momentum_10s`)
+- scores each tick using current artifact
+- optional hot-reload of artifact via `--model-reload-sec`
+
+Example:
 
 ```bash
-python model_training/predict.py
+python app.py --mode live --symbol btcusdt --model-reload-sec 10
 ```
 
-Default behavior:
+### Batch mode (WIP)
 
-- loads artifact from `model_training/artifacts/btc_direction_model.joblib`
-- loads input from `transform_data/l2_data_btcusdt_transformed.csv`
-- scores the last valid row
-- prints JSON:
-  - `row_index`
-  - `decision_threshold`
-  - `proba_up`
-  - `pred_up`
+Two sources:
+- `csv`: score existing transformed CSV
+- `socket`: collect for N seconds, then score once
 
-Useful options:
+Socket options:
+- `--batch-collect-sec`
+- `--batch-cycles`
+- `--batch-pause-sec`
+- `--auto-train` (drift-triggered)
+- `--auto-train-csv` (baseline/train dataset)
 
-```bash
-python model_training/predict.py --row 100
-python model_training/predict.py --input-csv path/to/file.csv
-python model_training/predict.py --artifact path/to/model.joblib
-```
-
-### `predict.py` Quick Reference
-
-| Item | Default | Notes |
-|---|---|---|
-| `--artifact` | `model_training/artifacts/btc_direction_model.joblib` | Trained model + threshold metadata |
-| `--input-csv` | `transform_data/l2_data_btcusdt_transformed.csv` | Must contain required feature columns |
-| `--row` | `-1` | `-1` = latest valid row, or pass a specific index |
-| Output: `row_index` | - | Scored row index |
-| Output: `decision_threshold` | from artifact | Cutoff used for class decision |
-| Output: `proba_up` | - | Probability of class `1` (up) |
-| Output: `pred_up` | - | Final class (`1` up, `0` down/flat) |
-
----
-
-## 5) Live Prediction (WebSocket + Model)
-
-Run live inference directly from Binance depth stream:
+Examples:
 
 ```bash
-python live_prediction/live_predict.py --symbol btcusdt
-```
+# CSV batch
+python app.py --mode batch --batch-source csv --input-csv transform_data/l2_data_btcusdt_transformed.csv
 
-Example with options:
+# Socket batch
+python app.py --mode batch --batch-source socket --symbol btcusdt --batch-collect-sec 30
 
-```bash
-python live_prediction/live_predict.py \
-  --symbol ethusdt \
-  --artifact model_training/artifacts/btc_direction_model.joblib \
-  --depth-levels 5 \
-  --interval-ms 1000 \
-  --momentum-periods 10
-```
-
-The script prints one JSON line per prediction with `proba_up` and `pred_up`.
-
----
-
-## 6) Backtesting with Trading Costs
-
-```bash
-python model_training/backtest.py \
-  --artifact model_training/artifacts/btc_direction_model.joblib \
-  --input-csv transform_data/l2_data_btcusdt_transformed.csv \
-  --fee-bps 1.0
-```
-
-Optional threshold override:
-
-```bash
-python model_training/backtest.py \
-  --input-csv transform_data/l2_data_btcusdt_transformed.csv \
-  --threshold 0.55
+# Socket cycles + drift-triggered auto-train
+python app.py --mode batch --batch-source socket --batch-cycles 5 --batch-collect-sec 20 --batch-pause-sec 2 --auto-train --auto-train-csv transform_data/l2_data_btcusdt_transformed.csv
 ```
 
 ---
 
-## 7) One-Command Transform + Train Pipeline
+## Drift-Triggered Auto-Train
 
-```bash
-python run_pipeline.py \
-  --raw-csv transform_data/l2_data_btcusdt.csv \
-  --transformed-csv transform_data/l2_data_btcusdt_transformed.csv \
-  --artifact-dir model_training/artifacts
-```
+When `--auto-train` is enabled in socket batch mode:
 
-This runs:
+1. baseline stats are loaded from `--auto-train-csv`
+2. each cycle computes current batch feature means
+3. drift score is computed:
+   - `mean(abs((current_mean - baseline_mean) / baseline_std))`
+4. if score >= threshold (`0.8`), app runs `model_training/train_model.py`
 
-1. `transform_data/transform_dataset.py`
-2. `model_training/train_model.py`
+This is feature-distribution drift detection, not label-performance drift.
 
 ---
 
-## End-to-End Flow
+## What Is One Socket Batch Cycle?
 
-1. Run `ingest_data/collector_multi.py` to gather market data
-2. Transform with `transform_data/transform_dataset.py`
-3. Train with `model_training/train_model.py` (or `run_pipeline.py`)
-4. Score batches with `model_training/predict.py`
-5. Run real-time scoring with `live_prediction/live_predict.py`
-6. Evaluate strategy with `model_training/backtest.py`
+One cycle does:
+1. load current artifact
+2. collect websocket data for `max(batch_collect_sec, 1.0)` seconds
+3. score collected rows
+4. optional auto-train if drift threshold is crossed
+5. sleep `batch_pause_sec` before next cycle (except final cycle)
 
----
-
-## Troubleshooting
-
-- **`Artifact not found`**
-  - Run `model_training/train.ipynb` first to create the artifact.
-- **Missing feature columns during inference**
-  - Ensure input CSV is the transformed dataset, not raw collector output.
-- **Notebook import/module errors**
-  - Activate `.venv` and reinstall requirements.
-- **Unstable metrics**
-  - This is expected with short windows/high noise. Use more data and walk-forward checks.
+Approx cycle time:
+- no retrain: `collect_sec + scoring_overhead + pause_sec`
+- with retrain: `collect_sec + scoring_overhead + train_time + pause_sec`
 
 ---
 
-## Remaining Next Steps
+## Key Files
 
-- Add richer backtesting logic (position sizing, hold horizon, latency assumptions)
-- Add automated periodic retraining
-- Add model registry/experiment tracking
+- `app.py` - app entrypoint
+- `tui_app/cli.py` - args and interactive prompts
+- `tui_app/modes.py` - live/batch runtime and drift-triggered retrain
+- `tui_app/features.py` - feature construction
+- `model_training/train_model.py` - training and artifact writing
+- `transform_data/transform_dataset.py` - raw -> transformed dataset
+- `ingest_data/collector_multi.py` - multi-symbol raw data collector
