@@ -9,7 +9,6 @@ statsmodels
 xarray
 dask
 pandas-datareader
-pandas-datareader
 jupyter
 notebook
 ipykernel

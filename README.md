@@ -123,6 +123,20 @@ Approx cycle time:
 
 ---
 
+## Repository layout
+
+```
+app.py                 # run the TUI (live / batch)
+tui_app/               # CLI, modes, Rich UI, features
+ingest_data/           # raw L2 collector
+transform_data/        # raw → features CSV
+model_training/        # train_model.py, backtest.py, artifacts/
+assets/                # README demo GIF
+run_pipeline.py        # transform + train in one shot
+```
+
+Standalone scripts `live_prediction/live_predict.py` and `model_training/predict.py` were removed; use `python app.py` for live and batch inference.
+
 ## Key Files
 
 - `app.py` - app entrypoint
